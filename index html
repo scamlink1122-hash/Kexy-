@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
+<title>kexy</title>
+
+<!-- Firebase -->
+<script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+
+<style>
+  :root{
+    --accent:#0095f6;
+  }
+  html,body{
+    height:100%;margin:0;font-family:Arial;background:#000;
+  }
+
+  /* PASSWORD SCREEN */
+  #passwordScreen{
+    position:fixed;inset:0;
+    background:url('https://wallpapers.com/images/hd/cryptic-japanese-hacker-code-gl49i6muqwnfzbst.jpg') no-repeat center/cover;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    z-index:999;color:white;
+  }
+  #passwordScreen::before{
+    content:'';position:absolute;inset:0;background:rgba(0,0,0,0.6);
+  }
+  #passwordScreen>*{z-index:2}
+  #passwordScreen h2{margin:0 0 12px;font-size:24px;}
+  #passwordScreen input{
+    width:140px;padding:12px;font-size:20px;text-align:center;border-radius:10px;border:none;
+  }
+  #passwordScreen button{
+    margin-top:12px;padding:10px 18px;border-radius:10px;border:none;background:var(--accent);color:#fff;
+  }
+
+  /* APP */
+  .app{display:none;flex-direction:column;height:100vh;padding:8px;box-sizing:border-box;}
+
+  .room-bar{
+    display:flex;gap:8px;background:#fff;padding:8px;border-radius:10px;
+  }
+  .room-bar input{flex:1;padding:8px;border:1px solid #ddd;border-radius:8px;}
+  .room-bar button{padding:8px 12px;background:var(--accent);color:#fff;border:none;border-radius:8px;}
+
+  /* VIDEO */
+  .video-wrap{position:relative;flex:1;background:#000;border-radius:10px;overflow:hidden;}
+  video{width:100%;height:100%;object-fit:cover;}
+
+  #localVideo{
+    position:absolute;right:12px;bottom:120px;width:120px;height:160px;border-radius:10px;border:2px solid #fff;
+    z-index:20;cursor:pointer;object-fit:cover;transform:scaleX(-1);
+  }
+
+  .controls{
+    display:flex;gap:12px;justify-content:center;padding:10px;
+  }
+  .controls button{
+    width:70px;height:45px;background:#111;color:white;border:none;border-radius:999px;font-size:18px;
+  }
+  .controls .end{background:#ff3b30;}
+
+  /* CHAT */
+  .chat{
+    background:#fff;border-radius:12px;padding:8px;max-height:260px;display:flex;flex-direction:column;gap:6px;
+  }
+  .messages{flex:1;overflow:auto;}
+  .msg{padding:6px 10px;border-radius:10px;max-width:70%;}
+  .sent{background:#dcf8c6;margin-left:auto;}
+  .received{background:#eee;margin-right:auto;}
+
+</style>
+</head>
+<body>
+
+<div id="passwordScreen">
+  <h2>Enter Password</h2>
+  <input id="passInput" maxlength="4">
+  <button id="passBtn">Unlock</button>
+  <p id="passError" style="color:#ff8888"></p>
+</div>
+
+<div class="app" id="app">
+  <div class="room-bar">
+    <input id="roomLink" readonly>
+    <button id="copyBtn">Copy</button>
+  </div>
+
+  <div class="video-wrap">
+    <video id="remoteVideo" autoplay playsinline></video>
+    <video id="localVideo" autoplay playsinline muted></video>
+  </div>
+
+  <div class="controls">
+    <button id="flipBtn">🔄</button>
+    <button id="muteBtn">🎤</button>
+    <button id="speakerBtn">🔊</button>
+    <button class="end" id="endBtn">❌</button>
+  </div>
+
+  <div class="chat">
+    <div class="messages" id="messages"></div>
+    <div style="display:flex;gap:8px">
+      <input type="text" id="msgInput" placeholder="Type...">
+      <input type="file" id="fileInput" style="display:none" accept="image/*,video/*">
+      <label for="fileInput" style="background:var(--accent);color:#fff;padding:8px 12px;border-radius:8px;cursor:pointer">📎</label>
+      <button id="sendBtn" style="background:var(--accent);color:#fff;border:none;padding:8px 12px;border-radius:8px">Send</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// Firebase
+firebase.initializeApp({
+  apiKey: "AIzaSyCdaMeWKKI7P8_sNeVbjs4eRlnufQItlJI",
+  authDomain: "video-call-a9749.firebaseapp.com",
+  databaseURL: "https://video-call-a9749-default-rtdb.firebaseio.com",
+  projectId: "video-call-a9749"
+});
+const db = firebase.database();
+
+// Password
+const PASSWORD = "1008";
+passBtn.onclick = () => {
+  if(passInput.value === PASSWORD){
+    passwordScreen.style.display="none";
+    app.style.display="flex";
+    startApp();
+  } else {
+    passError.textContent = "Wrong Password";
+  }
+};
+
+// VARIABLES
+let pc, localStream, roomId;
+let facingMode = "user";
+
+// CAMERA START
+async function startCamera(){
+  localStream = await navigator.mediaDevices.getUserMedia({
+    video:{facingMode}, audio:true
+  });
+  localVideo.srcObject = localStream;
+}
+
+// CAMERA SWITCH — FIXED (NO FREEZE)
+async function switchCamera(){
+  facingMode = facingMode === "user" ? "environment" : "user";
+  const newStream = await navigator.mediaDevices.getUserMedia({
+    video:{facingMode}, audio:true
+  });
+  
+  const videoTrackNew = newStream.getVideoTracks()[0];
+  const videoTrackOld = localStream.getVideoTracks()[0];
+
+  const sender = pc.getSenders().find(s => s.track && s.track.kind === "video");
+  await sender.replaceTrack(videoTrackNew);
+
+  localStream.removeTrack(videoTrackOld);
+  videoTrackOld.stop();
+
+  localStream.addTrack(videoTrackNew);
+  localVideo.srcObject = localStream;
+}
+
+// WEBRTC SETUP
+async function startApp(){
+  await startCamera();
+
+  const params = new URLSearchParams(location.search);
+  roomId = params.get("room") || Math.random().toString(36).slice(2,10);
+
+  roomLink.value = location.origin + location.pathname + "?room=" + roomId;
+
+  if(params.get("room")) joinRoom(roomId);
+  else createRoom(roomId);
+}
+
+// CREATE CALL
+async function createRoom(id){
+  pc = new RTCPeerConnection();
+  localStream.getTracks().forEach(t=>pc.addTrack(t,localStream));
+  pc.ontrack = e => remoteVideo.srcObject = e.streams[0];
+
+  pc.onicecandidate = e=>{
+    if(e.candidate) db.ref("rooms/"+id+"/candidates").push(JSON.stringify(e.candidate));
+  };
+
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  db.ref("rooms/"+id+"/offer").set(JSON.stringify(offer));
+
+  db.ref("rooms/"+id+"/answer").on("value", async snap=>{
+    if(snap.val() && !pc.currentRemoteDescription){
+      await pc.setRemoteDescription(JSON.parse(snap.val()));
+    }
+  });
+
+  db.ref("rooms/"+id+"/candidates").on("child_added", s=>{
+    pc.addIceCandidate(JSON.parse(s.val())).catch(()=>{});
+  });
+}
+
+// JOIN CALL
+async function joinRoom(id){
+  pc = new RTCPeerConnection();
+  localStream.getTracks().forEach(t=>pc.addTrack(t,localStream));
+  pc.ontrack = e => remoteVideo.srcObject = e.streams[0];
+
+  const offer = JSON.parse((await db.ref("rooms/"+id+"/offer").get()).val());
+  await pc.setRemoteDescription(offer);
+
+  const answer = await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+  db.ref("rooms/"+id+"/answer").set(JSON.stringify(answer));
+
+  pc.onicecandidate = e=>{
+    if(e.candidate) db.ref("rooms/"+id+"/candidates").push(JSON.stringify(e.candidate));
+  };
+
+  db.ref("rooms/"+id+"/candidates").on("child_added", s=>{
+    pc.addIceCandidate(JSON.parse(s.val())).catch(()=>{});
+  });
+}
+
+// CHAT
+sendBtn.onclick = sendMessage;
+msgInput.onkeydown = e => e.key==="Enter" && sendMessage();
+
+function sendMessage(){
+  const text = msgInput.value.trim();
+  if(text){
+    db.ref("rooms/"+roomId+"/chat").push({text});
+    addMsg(text,"sent");
+    msgInput.value="";
+  }
+}
+
+db.ref().on("child_added",()=>{})
+
+db.ref("rooms").on("child_added",()=>{})
+
+db.ref("rooms").on("value",()=>{})
+
+db.ref("rooms").on("child_removed",()=>{})
+
+db.ref("rooms/"+roomId+"/chat").on("child_added", snap=>{
+  const msg = snap.val();
+  addMsg(msg.text,"received");
+});
+
+function addMsg(txt,type){
+  let div=document.createElement("div");
+  div.className="msg "+type;
+  div.textContent=txt;
+  messages.appendChild(div);
+  messages.scrollTop=messages.scrollHeight;
+}
+
+// FILE SEND
+fileInput.onchange = ()=>{
+  const file = fileInput.files[0];
+  let r = new FileReader();
+  r.onload = ()=> {
+    db.ref("rooms/"+roomId+"/chat").push({text:r.result});
+    addMsg("[File Sent]", "sent");
+  };
+  r.readAsDataURL(file);
+};
+
+// BUTTONS
+flipBtn.onclick = switchCamera;
+muteBtn.onclick = ()=> {
+  const track = localStream.getAudioTracks()[0];
+  track.enabled = !track.enabled;
+  muteBtn.textContent = track.enabled ? "🎤" : "🔇";
+};
+speakerBtn.onclick = ()=> {
+  remoteVideo.muted = !remoteVideo.muted;
+  speakerBtn.textContent = remoteVideo.muted ? "🔈" : "🔊";
+};
+endBtn.onclick = ()=> location.reload();
+
+copyBtn.onclick = ()=>{
+  navigator.clipboard.writeText(roomLink.value);
+  copyBtn.textContent="Copied";
+  setTimeout(()=>copyBtn.textContent="Copy",1200);
+};
+</script>
+
+</body>
+</html>
